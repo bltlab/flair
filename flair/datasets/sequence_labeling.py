@@ -1,4 +1,5 @@
 import copy
+import functools
 import gzip
 import json
 import logging
@@ -3515,6 +3516,240 @@ class NER_MULTI_CONER_V2(MultiFileColumnCorpus):
             in_memory=in_memory,
             **corpusargs,
         )
+
+
+_OPENNER_RELEASES_API = "https://api.github.com/repos/bltlab/open-ner/releases"
+
+# Registry of all valid `datasets` keys for NER_MULTI_OPENNER, mapping each key to
+# (source_folder, language_folder, human_readable_label). Each entry corresponds to a
+# subdirectory in the OpenNER archive: standardized/<source_folder>/<language_folder>/{train,dev,test}.txt
+OPENNER_DATASETS = {
+    "aqmar": ("AQMAR", "ara", "Arabic (AQMAR)"),
+    "ancora_cat": ("AnCora", "cat", "Catalan (AnCora)"),
+    "ancora_spa": ("AnCora", "spa", "Spanish (AnCora)"),
+    "armanpersoner_fas": ("ArmanPersoNER", "fas", "Persian (ArmanPersoNER)"),
+    "barnier_bar": ("BarNER", "bar", "Bavarian German (BarNER)"),
+    "conll02_nld": ("CONLL02", "nld", "Dutch (CONLL02)"),
+    "conll02_spa": ("CONLL02", "spa", "Spanish (CONLL02)"),
+    "dane_dan": ("DaNE", "dan", "Danish (DaNE)"),
+    "eiec_eus": ("EIEC", "eus", "Basque (EIEC)"),
+    "everestner_nep": ("EverestNER", "nep", "Nepali (EverestNER)"),
+    "germeval_deu": ("GermEval", "deu", "German (GermEval)"),
+    "hiner_hin": ("HiNER", "hin", "Hindi (HiNER)"),
+    "japanese_gsd_jap": ("Japanese_GSD", "jap", "Japanese (Japanese_GSD)"),
+    "kind_ita": ("KIND", "ita", "Italian (KIND)"),
+    "kaznerd_kaz": ("KazNERD", "kaz", "Kazakh (KazNERD)"),
+    "l3cube_mahaner_mar": ("L3Cube_MahaNER", "mar", "Marathi (L3Cube_MahaNER)"),
+    "masakhaner_amh": ("MasakhaNER", "amh", "Amharic (MasakhaNER)"),
+    "masakhaner_hau": ("MasakhaNER", "hau", "Hausa (MasakhaNER)"),
+    "masakhaner_ibo": ("MasakhaNER", "ibo", "Igbo (MasakhaNER)"),
+    "masakhaner_kin": ("MasakhaNER", "kin", "Kinyarwanda (MasakhaNER)"),
+    "masakhaner_lug": ("MasakhaNER", "lug", "Luganda (MasakhaNER)"),
+    "masakhaner_luo": ("MasakhaNER", "luo", "Luo (MasakhaNER)"),
+    "masakhaner_pcm": ("MasakhaNER", "pcm", "Naija (MasakhaNER)"),
+    "masakhaner_swa": ("MasakhaNER", "swa", "Kiswahili (MasakhaNER)"),
+    "masakhaner_wol": ("MasakhaNER", "wol", "Wolof (MasakhaNER)"),
+    "masakhaner_yor": ("MasakhaNER", "yor", "Yoruba (MasakhaNER)"),
+    "masakhaner2_bam": ("MasakhaNER_2.0", "bam", "Bambara (MasakhaNER 2.0)"),
+    "masakhaner2_bbj": ("MasakhaNER_2.0", "bbj", "Basaa (MasakhaNER 2.0)"),
+    "masakhaner2_ewe": ("MasakhaNER_2.0", "ewe", "Ewe (MasakhaNER 2.0)"),
+    "masakhaner2_fon": ("MasakhaNER_2.0", "fon", "Fon (MasakhaNER 2.0)"),
+    "masakhaner2_hau": ("MasakhaNER_2.0", "hau", "Hausa (MasakhaNER 2.0)"),
+    "masakhaner2_ibo": ("MasakhaNER_2.0", "ibo", "Igbo (MasakhaNER 2.0)"),
+    "masakhaner2_kin": ("MasakhaNER_2.0", "kin", "Kinyarwanda (MasakhaNER 2.0)"),
+    "masakhaner2_lug": ("MasakhaNER_2.0", "lug", "Luganda (MasakhaNER 2.0)"),
+    "masakhaner2_luo": ("MasakhaNER_2.0", "luo", "Luo (MasakhaNER 2.0)"),
+    "masakhaner2_mos": ("MasakhaNER_2.0", "mos", "Mossi (MasakhaNER 2.0)"),
+    "masakhaner2_nya": ("MasakhaNER_2.0", "nya", "Chichewa (MasakhaNER 2.0)"),
+    "masakhaner2_pcm": ("MasakhaNER_2.0", "pcm", "Naija (MasakhaNER 2.0)"),
+    "masakhaner2_sna": ("MasakhaNER_2.0", "sna", "Chewa (MasakhaNER 2.0)"),
+    "masakhaner2_swa": ("MasakhaNER_2.0", "swa", "Kiswahili (MasakhaNER 2.0)"),
+    "masakhaner2_tsn": ("MasakhaNER_2.0", "tsn", "Setswana (MasakhaNER 2.0)"),
+    "masakhaner2_twi": ("MasakhaNER_2.0", "twi", "Twi (MasakhaNER 2.0)"),
+    "masakhaner2_wol": ("MasakhaNER_2.0", "wol", "Wolof (MasakhaNER 2.0)"),
+    "masakhaner2_xho": ("MasakhaNER_2.0", "xho", "isiXhosa (MasakhaNER 2.0)"),
+    "masakhaner2_yor": ("MasakhaNER_2.0", "yor", "Yoruba (MasakhaNER 2.0)"),
+    "masakhaner2_zul": ("MasakhaNER_2.0", "zul", "isiZulu (MasakhaNER 2.0)"),
+    "nemo_spmrl_heb": ("NEMO_SPMRL", "heb", "Hebrew (NEMO SPMRL)"),
+    "nemo_ud_heb": ("NEMO_UD", "heb", "Hebrew (NEMO UD)"),
+    "norne_nno": ("NorNE", "nno", "Norwegian Nynorsk (NorNE)"),
+    "norne_nob": ("NorNE", "nob", "Norwegian Bokmål (NorNE)"),
+    "ronec_ron": ("RONEC", "ron", "Romanian (RONEC)"),
+    "sli_galician_glg": ("SLI_Galician_Corpora", "glg", "Galician (SLI)"),
+    "thainner_tha": ("ThaiNNER", "tha", "Thai (ThaiNNER)"),
+    "turkunlp_fin": ("TurkuNLP", "fin", "Finnish (TurkuNLP)"),
+    "tweebank_eng": ("Tweebank", "eng", "English (Tweebank)"),
+    "uner_chinese_gsd": ("UNER_Chinese_GSD", "cmn", "Chinese (UNER GSD)"),
+    "uner_chinese_gdsimp": ("UNER_Chinese_GSDSIMP", "cmn", "Chinese (UNER GSDSIMP)"),
+    "uner_english_ewt": ("UNER_English_EWT", "eng", "English (UNER EWT)"),
+    "uner_maghrebi_arq": ("UNER_Maghrebi_Arabic_French-Arabizi", "arq", "Maghrebi Arabic (UNER)"),
+    "uner_portuguese_bosque": ("UNER_Portuguese-Bosque", "por", "Portuguese (UNER Bosque)"),
+    "uner_slovak_snk": ("UNER_Slovak_SNK", "slk", "Slovak (UNER SNK)"),
+    "uner_swedish_talkbanken": ("UNER_Swedish_Talkbanken", "swe", "Swedish (UNER Talkbanken)"),
+    "wnut17_eng": ("WNUT17", "eng", "English (WNUT17)"),
+    "wikigoldsk_slk": ("WikiGoldSK", "slk", "Slovak (WikiGoldSK)"),
+    "elner_ell": ("elNER", "ell", "Greek (elNER)"),
+    "hr500k_hrv": ("hr500k", "hrv", "Croatian (hr500k)"),
+    "ssj500k_slv": ("ssj500k", "slv", "Slovenian (ssj500k)"),
+}
+
+
+@functools.lru_cache(maxsize=1)
+def _get_latest_openner_release() -> str:
+    """Fetch the latest OpenNER release tag from GitHub.
+
+    Queries the GitHub Releases API for the most recently created release. Cached with
+    lru_cache so repeated calls in the same process do not re-hit the network. A failed
+    call is not cached, so a later call will retry.
+
+    Returns:
+        Release tag string, e.g. "v0.9.0".
+
+    Raises:
+        RuntimeError: If the GitHub API is unreachable or the repository has no releases.
+            Pass release_version explicitly to NER_MULTI_OPENNER() to avoid this lookup.
+    """
+    try:
+        response = requests.get(_OPENNER_RELEASES_API, timeout=10)
+        response.raise_for_status()
+        releases = response.json()
+    except requests.RequestException as exc:
+        raise RuntimeError(f"Failed to fetch OpenNER releases from GitHub: {exc}") from exc
+
+    if not releases:
+        raise RuntimeError("No OpenNER releases found on GitHub: https://github.com/bltlab/open-ner/releases")
+
+    return releases[0]["tag_name"]
+
+
+def _openner_release_url(release_version: str) -> str:
+    """Build the download URL for the OpenNER standardized dataset archive.
+
+    Args:
+        release_version: Version string with or without the "v" prefix, e.g. "v0.9.0" or "0.9.0".
+
+    Returns:
+        Full download URL pointing to GitHub releases.
+    """
+    version = release_version[1:] if release_version.startswith("v") else release_version
+    return f"https://github.com/bltlab/open-ner/releases/download/v{version}/standardized.zip"
+
+
+def _fetch_openner_data(release_version: str) -> Path:
+    """Download and extract the OpenNER standardized dataset archive.
+
+    The archive is cached under flair.cache_root, keyed by release version, so repeated
+    calls for the same version return immediately without re-downloading.
+
+    Args:
+        release_version: Version string, e.g. "v0.9.0".
+
+    Returns:
+        Path to the extracted "standardized/" directory containing all source/language trees.
+    """
+    archive_root = flair.cache_root / "datasets" / "openner-release" / release_version
+    archive_path = archive_root / "standardized.zip"
+    extract_path = archive_root / "standardized"
+
+    if not extract_path.exists():
+        archive_root.mkdir(parents=True, exist_ok=True)
+
+        if not archive_path.exists():
+            log.info("Downloading OpenNER dataset from GitHub releases...")
+            cached_path(_openner_release_url(release_version), archive_root)
+
+        log.info("Extracting OpenNER dataset...")
+        unpack_file(archive_path, archive_root, mode="zip", keep=False)
+
+    return extract_path
+
+
+class NER_MULTI_OPENNER(MultiCorpus):
+    def __init__(
+        self,
+        datasets: Union[str, list[str]] = "ancora_spa",
+        release_version: Optional[str] = None,
+        base_path: Optional[Union[str, Path]] = None,
+        in_memory: bool = True,
+        **corpusargs,
+    ) -> None:
+        """Initialize one or more OpenNER corpora, see https://github.com/bltlab/open-ner.
+
+        OpenNER bundles 67 standardized NER datasets spanning 50+ languages. Pass a dataset key or a
+        list of dataset keys to select the corpora you need, or pass "all" to load every dataset. See
+        flair.datasets.OPENNER_DATASETS for the full list of keys, e.g. "ancora_spa" or "masakhaner2_bam".
+
+        Args:
+            datasets: A dataset key, a list of dataset keys, or "all" for every OpenNER dataset.
+            release_version: OpenNER release tag to use, e.g. "v0.9.0". If None, the latest release
+                on GitHub is used.
+            base_path: Default is None, meaning the corpus is auto-downloaded and cached under
+                flair.cache_root. You can override this to point to a different folder, but typically
+                this should not be necessary.
+            in_memory: If True, keeps the dataset in memory, giving speedups in training.
+        """
+        if isinstance(datasets, str):
+            datasets = [datasets]
+
+        if datasets == ["all"]:
+            datasets = list(OPENNER_DATASETS)
+
+        unknown = sorted(set(datasets) - OPENNER_DATASETS.keys())
+        if unknown:
+            raise ValueError(
+                f"Unknown OpenNER dataset key(s): {unknown}. Supported keys are {sorted(OPENNER_DATASETS)} or 'all'."
+            )
+
+        release_version = release_version if release_version else _get_latest_openner_release()
+
+        base_path = flair.cache_root / "datasets" if not base_path else Path(base_path)
+        dataset_name = self.__class__.__name__.lower()
+        data_folder = base_path / dataset_name / release_version
+
+        # column format
+        columns = {0: "text", 1: "ner"}
+
+        # The full archive is only downloaded/extracted once, the first time it's needed.
+        archive_folder: Optional[Path] = None
+
+        corpora: list[Corpus] = []
+        for key in datasets:
+            source, language, label = OPENNER_DATASETS[key]
+            dataset_folder = data_folder / key
+
+            if not dataset_folder.exists():
+                if archive_folder is None:
+                    archive_folder = _fetch_openner_data(release_version)
+                source_folder = archive_folder / source / language
+                if not source_folder.exists():
+                    log.warning(
+                        'OpenNER data folder not found: "%s". The source "%s" for language "%s" '
+                        'may not exist in release "%s".',
+                        source_folder,
+                        source,
+                        language,
+                        release_version,
+                    )
+                    continue
+                shutil.copytree(source_folder, dataset_folder)
+
+            log.info("Reading data for %s (%s)", label, key)
+            # TODO: A handful of OpenNER sources ship no dev.txt, so ColumnCorpus falls back to
+            # Corpus's default sample_missing_splits=True and silently carves a dev set out of
+            # train. Consider whether that's the right default here, e.g. NER_NERMUD instead
+            # disables it to match its shared-task protocol.
+            corpora.append(
+                ColumnCorpus(
+                    data_folder=dataset_folder,
+                    column_format=columns,
+                    in_memory=in_memory,
+                    comment_symbol=None,
+                    name=key,
+                    **corpusargs,
+                )
+            )
+
+        super().__init__(corpora, name="openner-" + "-".join(datasets))
 
 
 class NER_MULTI_WIKIANN(MultiCorpus):

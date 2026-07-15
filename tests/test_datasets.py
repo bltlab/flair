@@ -874,6 +874,22 @@ def test_masakhane_corpus(tasks_base_path):
 
 
 @pytest.mark.skip()
+def test_openner_corpus(tasks_base_path):
+    # This test covers all 67 OpenNER datasets. For each one, check that the first
+    # sentence of the train, dev, and test splits can be loaded.
+    corpus = flair.datasets.NER_MULTI_OPENNER(datasets="all")
+
+    assert len(corpus.corpora) == len(flair.datasets.OPENNER_DATASETS)
+
+    for sub_corpus in corpus.corpora:
+        for split_name in ("train", "dev", "test"):
+            split = getattr(sub_corpus, split_name)
+            sentence = split[0]
+            assert isinstance(sentence, Sentence), f"{sub_corpus.name}: could not load first {split_name} sentence"
+            assert len(sentence) > 0, f"{sub_corpus.name}: first {split_name} sentence has no tokens"
+
+
+@pytest.mark.skip()
 def test_nermud_corpus(tasks_base_path):
     # This test covers the NERMuD dataset. Official stats can be found here:
     # https://github.com/dhfbk/KIND/tree/main/evalita-2023
